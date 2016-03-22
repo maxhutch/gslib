@@ -57,6 +57,7 @@ int main(int narg, char *arg[])
   int elementIndex,targetCore,i,j,nid,k;
   char buffer[1024];
   char inpFile[128];
+  char* file;
   int **mat,fail;
   T *v;
 
@@ -72,7 +73,14 @@ int main(int narg, char *arg[])
   MPI_Comm_rank(world,&nid);
 
   if(nid==0){
-    inp = fopen(arg[1],"r");
+
+    if(arg[1]==NULL) {
+      file = "a.map";
+    } else {
+      file = arg[1];
+    }
+
+    inp = fopen(file,"r");
     mat = (int **) malloc(sizeof(int *)*np);
     //Only supports 2d right now
     fgets(buffer,1024,inp);
@@ -172,6 +180,7 @@ int main(int narg, char *arg[])
     if(np!=1){
       for(i=0;i<sendcounts[0];i++){
         recvbuf[i] = sendbuf[i];
+        //        printf("recv %d\n",recvbuf[i]);
       }
     }
   } else {
@@ -186,6 +195,7 @@ int main(int narg, char *arg[])
   }
 
   gsh = gs_setup(recvbuf,localBufSpace,&comm,0,gs_pairwise,1);
+
 #pragma acc enter data create(v[0:localBufSpace])
 #pragma acc enter data copyin(recvbuf[0:localBufSpace])
 
@@ -194,6 +204,12 @@ int main(int narg, char *arg[])
     v[i] = recvbuf[i];
   }
 
+  /* gs_irecv(v,dom,gs_add,0,gsh,0); */
+  /* printf("after irecv, nid: %d\n",nid); */
+  /* gs_isend(v,dom,gs_add,0,gsh,0); */
+  /* printf("after isend, nid: %d\n",nid); */
+  /* gs_wait(v,dom,gs_add,0,gsh,0); */
+  /* printf("after wait, nid: %d\n",nid); */
   gs(v,dom,gs_add,0,gsh,0);
 
 #pragma acc update host(v[0:localBufSpace])
@@ -206,18 +222,27 @@ int main(int narg, char *arg[])
       fail = 1;
     }
   }
-  
-  if(fail==0) printf("Add success! on %d\n",nid);
+  //  if(fail==0) printf("Add success! on %d\n",nid);
   //Fill v
 #pragma acc parallel loop present(v[0:localBufSpace],recvbuf[0:localBufSpace])
   for(i=0;i<localBufSpace;i++){
     v[i] = recvbuf[i];
   }
+  fflush(stdout);
+  MPI_Barrier(MPI_COMM_WORLD);
 
-  gs(v,dom,gs_mul,0,gsh,0);
+
+  gs_irecv(v,dom,gs_mul,0,gsh,0);
+  //  for(i=0;i<localBufSpace;i++){
+    gs_isend_e(v,dom,gs_mul,0,gsh,0,0,localBufSpace);
+    //  }
+  gs_wait(v,dom,gs_mul,0,gsh,0);
+  //gs(v,dom,gs_mul,0,gsh,0);
 
 #pragma acc update host(v[0:localBufSpace])
   fail = 0;
+  MPI_Barrier(MPI_COMM_WORLD);
+
   //Check v
   for(i=0;i<localBufSpace;i++){
     if(v[i]!=pow(recvbuf[i],duplicate_count[recvbuf[i]])){
@@ -227,8 +252,8 @@ int main(int narg, char *arg[])
     }
   }
   
-  if(fail==0) printf("Mult success! on %d\n",nid);
-
+  //  if(fail==0) printf("Mult success! on %d\n",nid);
+  if(nid==0) printf("If there were no error messages, both mult and add succeeded!\n");
   comm_free(&comm);
   if(nid==0){
     for(i=0;i<np;i++) free(mat[i]);
